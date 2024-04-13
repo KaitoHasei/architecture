@@ -4,11 +4,19 @@ const express = require("express");
 const bodyParser = require("body-parser");
 
 const kafka = require("kafka-node");
-const { PrismaClient } = require("@prisma/client");
 const { registerEureka } = require("./eureka");
+const redis = require("redis");
+const { PrismaClient } = require("@prisma/client");
 
 const app = express();
 const prisma = new PrismaClient();
+let redisClient;
+(async () => {
+  redisClient = await redis
+    .createClient()
+    .on("error", (err) => console.log("redis client error:", err))
+    .connect();
+})();
 
 app.use(bodyParser.json());
 
@@ -43,22 +51,35 @@ app.post("/api/v1/users", async (req, res) => {
 app.get("/api/v1/users/:userId/products", async (req, res) => {
   const { userId } = req.params;
 
+  let result;
+  let isCached = false;
+
   try {
     if (!userId.trim()) throw { code: "bad-request" };
 
-    const user = await prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-    });
+    const userProductFromCache = await redisClient.get(userId);
 
-    const response = await fetch(
-      `${process.env.PRODUCT_SERVICE}/users/${userId}/products`
-    );
-    const data = await response.json();
-    const products = data?.productByUser;
+    if (userProductFromCache) {
+      isCached = true;
+      result = JSON.parse(userProductFromCache);
+    } else {
+      const user = await prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+      });
 
-    return res.status(200).json({ user, products });
+      const response = await fetch(
+        `${process.env.PRODUCT_SERVICE}/users/${userId}/products`
+      );
+      const data = await response.json();
+      const products = data?.productByUser;
+
+      result = { user, products };
+      redisClient.set(userId, JSON.stringify(result));
+    }
+
+    return res.status(200).json({ fromCache: isCached, result });
   } catch (error) {
     const { code } = error;
     console.log(error);
