@@ -58,6 +58,7 @@ app.get("/api/v1/users/:userId/products", async (req, res) => {
     if (!userId.trim()) throw { code: "bad-request" };
 
     const userProductFromCache = await redisClient.get(userId);
+    console.log(userProductFromCache);
 
     if (userProductFromCache) {
       isCached = true;
